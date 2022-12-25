@@ -86,4 +86,23 @@ netvlad_transforms = transforms.Compose([transforms.ToTensor(),
                                     transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                              std=[0.229, 0.224, 0.225])])
 
+# Augmentations
+train_transforms = {
+    'baseline': transforms.Compose([transforms.ToPILImage(),
+                                    transforms.Resize(256),
+                                    transforms.RandomCrop(224),
+                                    transforms.ColorJitter(0.5, 0.5, 0.5, 0.2),
+                                    transforms.ToTensor(),
+                                    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                                             std=[0.229, 0.224, 0.225])])
 
+}
+test_transforms = {
+    'baseline': transforms.Compose([transforms.ToPILImage(),
+                                    transforms.Resize(256),
+                                    transforms.CenterCrop(224),
+                                    transforms.ToTensor(),
+                                    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                                             std=[0.229, 0.224, 0.225])
+        ])
+}

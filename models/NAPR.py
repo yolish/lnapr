@@ -39,7 +39,7 @@ class PoseRegressor(nn.Module):
 
 class NAPR(nn.Module):
     def __init__(self, config, backbone_path):
-
+        super().__init__()
         self.avg_pooling_2d = nn.AdaptiveAvgPool2d(1)
         backbone_type = config.get("rpr_backbone_type")
         if backbone_type == "resnet50":
@@ -113,7 +113,7 @@ class NAPR(nn.Module):
         return z
 
 
-    def forward(self, query, refs, ref_pose, encode_refs=True):
+    def forward(self, data, encode_refs=True):
         '''
 
         :param query: N x Cin x H x W
@@ -122,6 +122,10 @@ class NAPR(nn.Module):
         :param encode_refs: boolean, whether to encode the ref images
         :return: p the pose of the query
         '''
+        query = data.get('query')
+        refs = data.get('knn')
+        ref_pose = data.get('ref_pose')
+
         z_query = self.forward_backbone(query) # shape: N x Cout
 
         if encode_refs:
@@ -146,7 +150,7 @@ class NAPR(nn.Module):
 
         # regress the deltas
         delta_x = self.rel_regressor_x(z_x)
-        delta_q = self.rel_regressor_x(z_q)
+        delta_q = self.rel_regressor_q(z_q)
 
         # compute the ref pose
         x = ref_pose[:, :3] + delta_x
@@ -155,45 +159,6 @@ class NAPR(nn.Module):
         p = torch.cat((x,q), dim=1)
 
         return {"pose":p}
-
-
-
-
-
-
-
-
-    """ A simple MLP to regress a pose component"""
-    def __init__(self, decoder_dim, output_dim, use_prior=False):
-        """
-        decoder_dim: (int) the input dimension
-        output_dim: (int) the outpur dimension
-        use_prior: (bool) whether to use prior information
-        """
-        super().__init__()
-        ch = 1024
-        self.fc_h = nn.Linear(decoder_dim, ch)
-        self.use_prior = use_prior
-        if self.use_prior:
-            self.fc_h_prior = nn.Linear(decoder_dim * 2, ch)
-        self.fc_o = nn.Linear(ch, output_dim)
-        self._reset_parameters()
-
-    def _reset_parameters(self):
-        for p in self.parameters():
-            if p.dim() > 1:
-                nn.init.xavier_uniform_(p)
-
-    def forward(self, x):
-        """
-        Forward pass
-        """
-        if self.use_prior:
-            x = F.gelu(self.fc_h_prior(x))
-        else:
-            x = F.gelu(self.fc_h(x))
-
-        return self.fc_o(x)
 
 
 class NSRPR(nn.Module):

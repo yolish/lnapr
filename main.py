@@ -11,20 +11,22 @@ import time
 from models.pose_losses import CameraPoseLoss
 from models.NAPR import NAPR
 from os.path import join
+from datasets.KNNCameraPoseDataset import KNNCameraPoseDataset
 
 
 
 if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser()
-    arg_parser.add_argument("mode", help="train or eval")
-    arg_parser.add_argument("backbone_path", help="path to backbone .pth - e.g. efficientnet")
-    arg_parser.add_argument("dataset_path", help="path to the physical location of the dataset")
-    arg_parser.add_argument("labels_file", help="path to a file mapping query images to their poses")
-    arg_parser.add_argument("refs_file", help="path to a file mapping reference images to their poses")
-    arg_parser.add_argument("knn_file", help="path to a file mapping query images to their knns")
+    arg_parser.add_argument("--mode", help="train or eval")
+    arg_parser.add_argument("--backbone_path", help="path to backbone .pth - e.g. efficientnet", default="models/backbones/efficient-net-b0.pth")
+    arg_parser.add_argument("--dataset_path", help="path to the physical location of the dataset", default="/nfstemp/Datasets/7Scenes/")
+    arg_parser.add_argument("--labels_file", help="path to a file mapping query images to their poses", default="datasets/7Scenes/7scenes_all_scenes.csv")
+    arg_parser.add_argument("--refs_file", help="path to a file mapping reference images to their poses", default="datasets/7Scenes/7scenes_all_scenes.csv")
+    arg_parser.add_argument("--knn_file", help="path to a file mapping query images to their knns", default="datasets/7Scenes/7scenes_all_scenes.csv_with_netvlads.csv-knn-7scenes_all_scenes.csv_with_netvlads.csv")
     arg_parser.add_argument("--checkpoint_path",
                             help="path to a pre-trained model (should match the model indicated in model_name")
     arg_parser.add_argument("--experiment", help="a short string to describe the experiment/commit used")
+    arg_parser.add_argument("--config_file", help="path to configuration file", default="7scenes_config.json")
 
     args = arg_parser.parse_args()
     utils.init_logger()
@@ -38,7 +40,7 @@ if __name__ == "__main__":
     logging.info("Using KNN file: {}".format(args.knn_file))
 
     # Read configuration
-    with open('config.json', "r") as read_file:
+    with open(args.config_file, "r") as read_file:
         config = json.load(read_file)
 
     logging.info("Running with configuration:\n{}".format(
@@ -58,7 +60,7 @@ if __name__ == "__main__":
     device = torch.device(device_id)
 
     # Create the model
-    model = NAPR(args.backbone_path, config).to(device)
+    model = NAPR(config, args.backbone_path).to(device)
     # Load the checkpoint if needed
     if args.checkpoint_path:
         model.load_state_dict(torch.load(args.checkpoint_path, map_location=device_id))
@@ -111,7 +113,7 @@ if __name__ == "__main__":
             for batch_idx, minibatch in enumerate(dataloader):
                 for k, v in minibatch.items():
                     minibatch[k] = v.to(device).to(dtype=torch.float32)
-                gt_pose = minibatch.get('pose')
+                gt_pose = minibatch.get('query_pose')
                 batch_size = gt_pose.shape[0]
                 n_samples += batch_size
                 n_total_samples += batch_size
@@ -172,7 +174,7 @@ if __name__ == "__main__":
                 for k, v in minibatch.items():
                     minibatch[k] = v.to(device).to(dtype=torch.float32)
 
-                gt_pose = minibatch.get('pose')
+                gt_pose = minibatch.get('query_pose')
 
                 # Forward pass to predict the pose
                 tic = time.time()

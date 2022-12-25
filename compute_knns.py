@@ -12,10 +12,9 @@ def get_knn_indices(query, db):
 if __name__ == "__main__":
 
     arg_parser = argparse.ArgumentParser()
-    arg_parser.add_argument("--data_path", help="path where netvlads are",
-                            default="/media/yoli/WDC-2.0-TB-Hard-/CambridgeLandmarks/netvlads/")
-    arg_parser.add_argument("--db_labels_file", default="datasets/CambridgeLandmarks/cambridge_four_scenes.csv_with_netvlads.csv")
-    arg_parser.add_argument("--query_labels_file", default="datasets/CambridgeLandmarks/cambridge_four_scenes.csv_with_netvlads.csv")
+    arg_parser.add_argument("--data_path", help="path where netvlads are", default="/nfstemp/Datasets/7Scenes/netvlads/")
+    arg_parser.add_argument("--db_labels_file", default="datasets/7Scenes/7scenes_all_scenes.csv_with_netvlads.csv")
+    arg_parser.add_argument("--query_labels_file", default="datasets/7Scenes/7scenes_all_scenes.csv_with_netvlads.csv")
 
     args = arg_parser.parse_args()
 

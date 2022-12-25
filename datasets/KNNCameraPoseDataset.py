@@ -25,9 +25,13 @@ class KNNCameraPoseDataset(Dataset):
         lines = open(knn_file).readlines()
         for l in lines:
             neighbors = l.rstrip().split(",")
-            q = join(dataset_path, neighbors[0])
+            nn = neighbors[0].replace('_netvlad.npz', '.png')
+            nn = nn.replace('_', '/')
+            q = join(dataset_path, nn)
             my_knns = []
             for nn in neighbors[1:]:
+                nn = nn.replace('_netvlad.npz', '.png')
+                nn = nn.replace('_', '/')
                 my_knns.append(join(dataset_path, nn))
             knns[q] = my_knns
         self.knns = knns
@@ -36,7 +40,7 @@ class KNNCameraPoseDataset(Dataset):
         self.sample = sample
 
     def __len__(self):
-        return len(self.query_paths)
+        return len(self.query_img_paths)
 
     def load_img(self, img_path):
         img = imread(img_path)
@@ -46,7 +50,7 @@ class KNNCameraPoseDataset(Dataset):
 
     def __getitem__(self, idx):
 
-        query_path = self.query_netvlads_paths[idx]
+        query_path = self.query_img_paths[idx]
         knn_paths = self.knns[query_path]
 
         if self.sample:
