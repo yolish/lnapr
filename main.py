@@ -17,7 +17,7 @@ from datasets.KNNCameraPoseDataset import KNNCameraPoseDataset
 
 if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser()
-    arg_parser.add_argument("--mode", help="train or eval")
+    arg_parser.add_argument("--mode", help="train or eval", default='train')
     arg_parser.add_argument("--backbone_path", help="path to backbone .pth - e.g. efficientnet", default="models/backbones/efficient-net-b0.pth")
     arg_parser.add_argument("--dataset_path", help="path to the physical location of the dataset", default="/nfstemp/Datasets/7Scenes/")
     arg_parser.add_argument("--labels_file", help="path to a file mapping query images to their poses", default="datasets/7Scenes/7scenes_all_scenes.csv")
