@@ -12,7 +12,7 @@ if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument("--data_path", help="path where images are", default="/nfstemp/Datasets/7Scenes/")
     arg_parser.add_argument("--netvlad_path", help="path to netvlad model", default="pretrained_models/pretrained_vgg16_pitts30k_netvlad_from_matlab.pth")
-    arg_parser.add_argument("--labels_file", help="path to a file mapping images to their poses", default="datasets/7Scenes/7scenes_all_scenes.csv")
+    arg_parser.add_argument("--labels_file", help="path to a file mapping images to their poses", default="datasets/7Scenes/abs_7scenes_pose.csv_chess_test.csv")
     arg_parser.add_argument("--device_id", help="torch device id", default="cuda:2")
 
     args = arg_parser.parse_args()

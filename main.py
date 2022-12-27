@@ -13,6 +13,50 @@ from models.NAPR import NAPR
 from os.path import join
 from datasets.KNNCameraPoseDataset import KNNCameraPoseDataset
 
+def test(args, config, model, labels_file, refs_file, knn_file, num_neighbors):
+    # Set to eval mode
+    model.eval()
+
+    # Set the dataset and data loader
+    transform = utils.test_transforms.get('baseline')
+    dataset = KNNCameraPoseDataset(args.dataset_path, labels_file, refs_file, knn_file, num_neighbors, transform)
+    loader_params = {'batch_size': 1,
+                     'shuffle': False,
+                     'num_workers': config.get('n_workers')}
+    dataloader = torch.utils.data.DataLoader(dataset, **loader_params)
+
+    stats = np.zeros((len(dataloader.dataset), 3))
+
+    with torch.no_grad():
+        for i, minibatch in enumerate(dataloader, 0):
+            for k, v in minibatch.items():
+                minibatch[k] = v.to(device).to(dtype=torch.float32)
+
+            gt_pose = minibatch.get('query_pose')
+
+            # Forward pass to predict the pose
+            tic = time.time()
+            est_pose = model(minibatch).get('pose')
+            toc = time.time()
+
+            # Evaluate error
+            posit_err, orient_err = utils.pose_err(est_pose, gt_pose)
+
+            # Collect statistics
+            stats[i, 0] = posit_err.item()
+            stats[i, 1] = orient_err.item()
+            stats[i, 2] = (toc - tic) * 1000
+
+            logging.info("Pose error: {:.3f}[m], {:.3f}[deg], inferred in {:.2f}[ms]".format(
+                stats[i, 0], stats[i, 1], stats[i, 2]))
+
+    # Record overall statistics
+    logging.info("Performance of {} on {}".format(args.checkpoint_path, args.labels_file))
+    logging.info(
+        "Median pose error: {:.3f}[m], {:.3f}[deg]".format(np.nanmedian(stats[:, 0]), np.nanmedian(stats[:, 1])))
+    logging.info("Mean inference time:{:.2f}[ms]".format(np.mean(stats[:, 2])))
+
+    return stats
 
 
 if __name__ == "__main__":
@@ -27,6 +71,7 @@ if __name__ == "__main__":
                             help="path to a pre-trained model (should match the model indicated in model_name")
     arg_parser.add_argument("--experiment", help="a short string to describe the experiment/commit used")
     arg_parser.add_argument("--config_file", help="path to configuration file", default="7scenes_config.json")
+    arg_parser.add_argument("--test_dataset_id", default="7scenes", help="test set id for testing on all scenes, options: 7scene OR cambridge")
 
     args = arg_parser.parse_args()
     utils.init_logger()
@@ -155,44 +200,27 @@ if __name__ == "__main__":
         torch.save(model.state_dict(), checkpoint_prefix + '_final.pth'.format(epoch))
 
     else: # Test
-        # Set to eval mode
-        model.eval()
-
-        # Set the dataset and data loader
-        transform = utils.test_transforms.get('baseline')
-        dataset = KNNCameraPoseDataset(args.dataset_path, args.labels_file, args.refs_file,
-                                       args.knn_file, num_neighbors, transform)
-        loader_params = {'batch_size': 1,
-                         'shuffle': False,
-                         'num_workers': config.get('n_workers')}
-        dataloader = torch.utils.data.DataLoader(dataset, **loader_params)
-
-        stats = np.zeros((len(dataloader.dataset), 3))
-
-        with torch.no_grad():
-            for i, minibatch in enumerate(dataloader, 0):
-                for k, v in minibatch.items():
-                    minibatch[k] = v.to(device).to(dtype=torch.float32)
-
-                gt_pose = minibatch.get('query_pose')
-
-                # Forward pass to predict the pose
-                tic = time.time()
-                est_pose = model(minibatch).get('pose')
-                toc = time.time()
-
-                # Evaluate error
-                posit_err, orient_err = utils.pose_err(est_pose, gt_pose)
-
-                # Collect statistics
-                stats[i, 0] = posit_err.item()
-                stats[i, 1] = orient_err.item()
-                stats[i, 2] = (toc - tic)*1000
-
-                logging.info("Pose error: {:.3f}[m], {:.3f}[deg], inferred in {:.2f}[ms]".format(
-                    stats[i, 0],  stats[i, 1],  stats[i, 2]))
-
-        # Record overall statistics
-        logging.info("Performance of {} on {}".format(args.checkpoint_path, args.labels_file))
-        logging.info("Median pose error: {:.3f}[m], {:.3f}[deg]".format(np.nanmedian(stats[:, 0]), np.nanmedian(stats[:, 1])))
-        logging.info("Mean inference time:{:.2f}[ms]".format(np.mean(stats[:, 2])))
+        f = open("{}_{}_report.csv".format(args.test_dataset_id, utils.get_stamp_from_log()), 'w')
+        f.write("scene,pos,ori\n")
+        if args.test_dataset_id == "7scenes":
+            scenes = ["chess", "fire", "heads", "office", "pumpkin", "redkitchen", "stairs"]
+            for scene in scenes:
+                labels_file = "./datasets/7Scenes/abs_7scenes_pose.csv_{}_test.csv".format(scene)
+                refs_file = args.refs_file
+                knn_file = "./datasets/7Scenes/abs_7scenes_pose.csv_{}_test.csv_with_netvlads.csv-knn-7scenes_all_scenes.csv_with_netvlads.csv".format(scene)
+                stats = test(args, config, model, labels_file, refs_file, knn_file, num_neighbors)
+                f.write("{},{:.3f},{:.3f}\n".format(scene, np.nanmedian(stats[:, 0]),
+                                                    np.nanmedian(stats[:, 1])))
+        # elif args.test_dataset_id == "cambridge":
+        #
+        #     scenes = ["KingsCollege", "OldHospital", "ShopFacade", "StMarysChurch"]
+        #     for scene in scenes:
+        #         args.cluster_predictor_position = "./datasets/CambridgeLandmarks/cambridge_four_scenes.csv_scene_{}_position_{}_classes.sav".format(
+        #             scene, num_clusters_position)
+        #         args.cluster_predictor_orientation = "./datasets/CambridgeLandmarks/cambridge_four_scenes.csv_scene_{}_orientation_{}_classes.sav".format(
+        #             scene, num_clusters_orientation)
+        #         args.labels_file = "./datasets/CambridgeLandmarks/abs_cambridge_pose_sorted.csv_{}_test.csv".format(
+        #             scene)
+        #         stats = test(args, config, model, apply_c2f, num_clusters_position, num_clusters_orientation)
+        #         f.write("{},{:.3f},{:.3f}\n".format(scene, np.nanmedian(stats[:, 0]),
+        #                                             np.nanmedian(stats[:, 1])))

@@ -3,6 +3,40 @@ import torch
 import torch.nn.functional as F
 import torchvision
 
+def batch_dot(v1, v2):
+    """
+    Dot product along the dim=1
+    :param v1: (torch.tensor) Nxd tensor
+    :param v2: (torch.tensor) Nxd tensor
+    :return: N x 1
+    """
+    out = torch.mul(v1, v2)
+    out = torch.sum(out, dim=1, keepdim=True)
+    return out
+
+def qmult(quat_1, quat_2):
+    """
+    Perform quaternions multiplication
+    :param quat_1: (torch.tensor) Nx4 tensor
+    :param quat_2: (torch.tensor) Nx4 tensor
+    :return: quaternion product
+    """
+    # Extracting real and virtual parts of the quaternions
+    q1s, q1v = quat_1[:, :1], quat_1[:, 1:]
+    q2s, q2v = quat_2[:, :1], quat_2[:, 1:]
+
+    qs = q1s*q2s - batch_dot(q1v, q2v)
+    qv = q1v.mul(q2s.expand_as(q1v)) + q2v.mul(q1s.expand_as(q2v)) + torch.cross(q1v, q2v, dim=1)
+    q = torch.cat((qs, qv), dim=1)
+    return q
+
+def compute_abs_pose_torch(rel_pose, abs_pose_neighbor):
+    abs_pose_query = torch.zeros_like(rel_pose)
+    abs_pose_query[:, :3] = abs_pose_neighbor[:, :3] + rel_pose[:, :3]
+    abs_pose_query[:, 3:] = qmult(abs_pose_neighbor[:, 3:], rel_pose[:, 3:])
+    return abs_pose_query
+
+
 class PoseRegressor(nn.Module):
     """ A simple MLP to regress a pose component"""
 

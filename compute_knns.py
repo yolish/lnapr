@@ -13,8 +13,9 @@ if __name__ == "__main__":
 
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument("--data_path", help="path where netvlads are", default="/nfstemp/Datasets/7Scenes/netvlads/")
+    arg_parser.add_argument("--data_path_db", help="path where netvlads are", default="/nfstemp/Datasets/7Scenes/netvlads_train/")
     arg_parser.add_argument("--db_labels_file", default="datasets/7Scenes/7scenes_all_scenes.csv_with_netvlads.csv")
-    arg_parser.add_argument("--query_labels_file", default="datasets/7Scenes/7scenes_all_scenes.csv_with_netvlads.csv")
+    arg_parser.add_argument("--query_labels_file", default="datasets/7Scenes/abs_7scenes_pose.csv_chess_test.csv_with_netvlads.csv")
 
     args = arg_parser.parse_args()
 
@@ -40,7 +41,7 @@ if __name__ == "__main__":
         # read db into memory
         db = np.zeros((n, dim))
         for i, path in enumerate(db_paths):
-            db[i, :] = np.load(join(args.data_path, path))['arr_0']
+            db[i, :] = np.load(join(args.data_path_db, path))['arr_0']
 
         for i, path in enumerate(query_paths):
             f.write(path+",")
