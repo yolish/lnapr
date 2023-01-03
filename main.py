@@ -12,6 +12,7 @@ from models.pose_losses import CameraPoseLoss
 from models.NAPR import NAPR
 from os.path import join
 from datasets.KNNCameraPoseDataset import KNNCameraPoseDataset
+import pandas as pd
 
 def test(args, config, model, labels_file, refs_file, knn_file, num_neighbors):
     # Set to eval mode
@@ -19,7 +20,7 @@ def test(args, config, model, labels_file, refs_file, knn_file, num_neighbors):
 
     # Set the dataset and data loader
     transform = utils.test_transforms.get('baseline')
-    dataset = KNNCameraPoseDataset(args.dataset_path, labels_file, refs_file, knn_file, num_neighbors, transform)
+    dataset = KNNCameraPoseDataset(args.dataset_path, labels_file, refs_file, knn_file, num_neighbors, transform, config.get('ref_pose_type'))
     loader_params = {'batch_size': 1,
                      'shuffle': False,
                      'num_workers': config.get('n_workers')}
@@ -66,11 +67,14 @@ if __name__ == "__main__":
     arg_parser.add_argument("--dataset_path", help="path to the physical location of the dataset", default="/nfstemp/Datasets/7Scenes/")
     arg_parser.add_argument("--labels_file", help="path to a file mapping query images to their poses", default="datasets/7Scenes/7scenes_all_scenes.csv")
     arg_parser.add_argument("--refs_file", help="path to a file mapping reference images to their poses", default="datasets/7Scenes/7scenes_all_scenes.csv")
-    arg_parser.add_argument("--knn_file", help="path to a file mapping query images to their knns", default="datasets/7Scenes/7scenes_all_scenes.csv_with_netvlads.csv-knn-7scenes_all_scenes.csv_with_netvlads.csv")
+    #arg_parser.add_argument("--knn_file", help="path to a file mapping query images to their knns", default="datasets/7Scenes/7scenes_all_scenes.csv_with_netvlads.csv-knn-7scenes_all_scenes.csv_with_netvlads.csv")
+    arg_parser.add_argument("--knn_file", help="path to a file mapping query images to their knns", default="datasets/7Scenes_pairs/7scenes_training_pairs_neighbors_4_sorted.csv")
     arg_parser.add_argument("--checkpoint_path",
                             help="path to a pre-trained model (should match the model indicated in model_name")
     arg_parser.add_argument("--experiment", help="a short string to describe the experiment/commit used")
     arg_parser.add_argument("--config_file", help="path to configuration file", default="7scenes_config.json")
+    #arg_parser.add_argument("--ref_pose_type", help="ref_pose_type: 0=mean, 1=first, 2=median", type=int, default=0)
+    arg_parser.add_argument("--gpu", help="gpu id", default="1")
     arg_parser.add_argument("--test_dataset_id", default="7scenes", help="test set id for testing on all scenes, options: 7scene OR cambridge")
 
     args = arg_parser.parse_args()
@@ -100,7 +104,7 @@ if __name__ == "__main__":
     if use_cuda:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
-        device_id = config.get('device_id')
+        device_id = 'cuda:' + args.gpu
     np.random.seed(numpy_seed)
     device = torch.device(device_id)
 
@@ -133,7 +137,7 @@ if __name__ == "__main__":
 
         transform = utils.train_transforms.get('baseline')
         dataset = KNNCameraPoseDataset(args.dataset_path, args.labels_file, args.refs_file,
-                                       args.knn_file, num_neighbors, transform)
+                                       args.knn_file, num_neighbors, transform, config.get('ref_pose_type'))
         loader_params = {'batch_size': config.get('batch_size'),
                                   'shuffle': True,
                                   'num_workers': config.get('n_workers')}
@@ -198,16 +202,22 @@ if __name__ == "__main__":
 
         logging.info('Training completed')
         torch.save(model.state_dict(), checkpoint_prefix + '_final.pth'.format(epoch))
+        # Plot the loss function
+        loss_fig_path = checkpoint_prefix + "_loss_fig.png"
+        utils.plot_loss_func(sample_count, loss_vals, loss_fig_path)
 
-    else: # Test
+    elif args.mode == 'test': # Test
         f = open("{}_{}_report.csv".format(args.test_dataset_id, utils.get_stamp_from_log()), 'w')
         f.write("scene,pos,ori\n")
         if args.test_dataset_id == "7scenes":
             scenes = ["chess", "fire", "heads", "office", "pumpkin", "redkitchen", "stairs"]
-            for scene in scenes:
+            #for scene in scenes:
+            scene = 'chess'
+            if 1:
                 labels_file = "./datasets/7Scenes/abs_7scenes_pose.csv_{}_test.csv".format(scene)
                 refs_file = args.refs_file
-                knn_file = "./datasets/7Scenes/abs_7scenes_pose.csv_{}_test.csv_with_netvlads.csv-knn-7scenes_all_scenes.csv_with_netvlads.csv".format(scene)
+                #knn_file = "./datasets/7Scenes/abs_7scenes_pose.csv_{}_test.csv_with_netvlads.csv-knn-7scenes_all_scenes.csv_with_netvlads.csv".format(scene)
+                knn_file = "./datasets/7Scenes_pairs/7scenes_knn_test_neigh_{}.csv".format(scene)
                 stats = test(args, config, model, labels_file, refs_file, knn_file, num_neighbors)
                 f.write("{},{:.3f},{:.3f}\n".format(scene, np.nanmedian(stats[:, 0]),
                                                     np.nanmedian(stats[:, 1])))
@@ -224,3 +234,53 @@ if __name__ == "__main__":
         #         stats = test(args, config, model, apply_c2f, num_clusters_position, num_clusters_orientation)
         #         f.write("{},{:.3f},{:.3f}\n".format(scene, np.nanmedian(stats[:, 0]),
         #                                             np.nanmedian(stats[:, 1])))
+
+    else: # sort poses to new csv
+        pose_loss = CameraPoseLoss(config).to(device)
+        # TODO consider adding triplet loss
+
+        # Set the optimizer and scheduler
+        transform = utils.train_transforms.get('baseline')
+        dataset = KNNCameraPoseDataset(args.dataset_path, args.labels_file, args.refs_file,
+                                       args.knn_file, num_neighbors, transform)
+        batch_size = 1 # config.get('batch_size')
+        loader_params = {'batch_size': batch_size,
+                         'shuffle': False,
+                         'num_workers': config.get('n_workers')}
+        dataloader = torch.utils.data.DataLoader(dataset, **loader_params)
+
+        # Get training details
+        n_epochs = 1
+        for epoch in range(n_epochs):
+            new_list = []
+            for batch_idx, minibatch in enumerate(dataloader):
+                gt_pose = minibatch.get('query_pose').to(device).to(dtype=torch.float32)
+                batch_size = gt_pose.shape[0]
+
+                knn_poses = minibatch.get('knn_poses').to(device).to(dtype=torch.float32)
+                knn_imgs = minibatch.get('knn_imgs')
+                query_img = minibatch.get('query_img')
+                criterion_list = []
+                for i in range(len(knn_poses[0])):
+                    pose = knn_poses[0][i]
+                    if pose[0] == 0:
+                        continue
+                    pose = pose.unsqueeze(0)
+                    criterion = pose_loss(pose, gt_pose)
+                    criterion_list.append([np.abs(criterion.detach().cpu()[0]), knn_imgs[i][0]])
+                criterion_list = sorted(criterion_list)
+
+                sorted_imgs = []
+                sorted_imgs.append(query_img[0].replace(args.dataset_path, ""))
+                for i in range(len(criterion_list)):
+                    sorted_imgs.append(criterion_list[i][1].replace(args.dataset_path, ""))
+                #print(sorted_imgs)
+                new_list.append(sorted_imgs)
+                #if batch_idx > 2:
+                #    break
+
+            #np.savetxt("neigh_sorted.csv", new_list, delimiter=",", fmt='%s')
+            df_new = pd.DataFrame(data=new_list, index=None)
+            df_new.to_csv('neigh_sorted.csv', header=False, index=False)
+
+

@@ -188,7 +188,8 @@ class NAPR(nn.Module):
 
         # compute the ref pose
         x = ref_pose[:, :3] + delta_x
-        q = ref_pose[:, 3:] + delta_q
+        #q = ref_pose[:, 3:] + delta_q
+        q = qmult(ref_pose[:, 3:], delta_q)
 
         p = torch.cat((x,q), dim=1)
 

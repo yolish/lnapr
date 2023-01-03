@@ -9,7 +9,7 @@ import torch
 import numpy as np
 import torch.nn.functional as F
 from torchvision import transforms
-
+import matplotlib.pyplot as plt
 
 # Logging and output utils
 ##########################
@@ -106,3 +106,12 @@ test_transforms = {
                                                              std=[0.229, 0.224, 0.225])
         ])
 }
+
+def plot_loss_func(sample_count, loss_vals, loss_fig_path):
+    plt.figure()
+    plt.plot(sample_count, loss_vals)
+    plt.grid()
+    plt.title('Camera Pose Loss')
+    plt.xlabel('Number of samples')
+    plt.ylabel('Loss')
+    plt.savefig(loss_fig_path)

@@ -12,7 +12,7 @@ class KNNCameraPoseDataset(Dataset):
     """
 
     def __init__(self, dataset_path, query_labels_file, db_labels_file, knn_file,
-                 sample_size, transform, sample=False):
+                 sample_size, transform, ref_pose_type, sample=False):
         super(KNNCameraPoseDataset, self).__init__()
 
         self.query_img_paths, self.query_poses, self.query_scenes, self.query_scenes_ids = read_labels_file(query_labels_file, dataset_path)
@@ -23,24 +23,33 @@ class KNNCameraPoseDataset(Dataset):
 
         knns = {}
         lines = open(knn_file).readlines()
+        i = 0
+        knn_queries = {}
         for l in lines:
             neighbors = l.rstrip().split(",")
-            nn = neighbors[0].replace('_netvlad.npz', '.png')
-            nn = nn.replace('_', '/')
+            nn = neighbors[0]
+            if 'netvlad.npz' in nn:
+                nn = neighbors[0].replace('_netvlad.npz', '.png')
+                nn = nn.replace('_', '/')
             q = join(dataset_path, nn)
             my_knns = []
             for nn in neighbors[1:]:
-                nn = nn.replace('_netvlad.npz', '.png')
-                nn = nn.replace('_', '/')
+                if 'netvlad.npz' in nn:
+                    nn = nn.replace('_netvlad.npz', '.png')
+                    nn = nn.replace('_', '/')
                 my_knns.append(join(dataset_path, nn))
             knns[q] = my_knns
+            knn_queries[i] = q
+            i += 1
         self.knns = knns
+        self.knn_queries = knn_queries
         self.sample_size = sample_size
         self.transform = transform
         self.sample = sample
+        self.ref_pose_type = ref_pose_type
 
     def __len__(self):
-        return len(self.query_img_paths)
+        return len(self.knn_queries)
 
     def load_img(self, img_path):
         img = imread(img_path)
@@ -49,9 +58,9 @@ class KNNCameraPoseDataset(Dataset):
         return img
 
     def __getitem__(self, idx):
-
-        query_path = self.query_img_paths[idx]
+        query_path = self.knn_queries[idx]
         knn_paths = self.knns[query_path]
+        #query_path = self.query_img_paths[q_path]
 
         if self.sample:
             indices = np.random.choice(len(knn_paths), size=self.sample_size)
@@ -63,14 +72,27 @@ class KNNCameraPoseDataset(Dataset):
         query_pose = self.query_to_pose[query_path]
 
         knn = []
+        knn_imgs = []
         knn_poses = np.zeros((self.sample_size, 7))
+        #knn_poses = np.zeros((len(knn_paths), 7))
         for i, nn_path in enumerate(knn_paths):
+            if 'png' not in nn_path:
+                continue
             knn.append(self.load_img(nn_path))
             knn_poses[i, :] = self.db_to_pose[nn_path]
+            knn_imgs.append(nn_path)
         knn = torch.stack(knn)
         #todo change computation of ref pose [?]
-        ref_pose = np.mean(knn_poses, axis=0)
+        # 1st / median? /
+        if self.ref_pose_type == 1: # take 1st ref pose
+            ref_pose = knn_poses[0]
+        elif self.ref_pose_type == 2:
+            ref_pose = knn_poses[self.sample_size//2]
+        else:
+            ref_pose = np.mean(knn_poses, axis=0)
+
         return {"query":query, "query_pose":query_pose, "knn":knn, "ref_pose":ref_pose}
+        #return {"query":query, "query_pose":query_pose, "knn":knn, "ref_pose":ref_pose, "knn_poses":knn_poses, "knn_imgs":knn_imgs, "query_img":query_path}
 
 
 def read_labels_file(labels_file, dataset_path):
