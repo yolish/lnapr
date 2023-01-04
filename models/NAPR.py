@@ -3,6 +3,121 @@ import torch
 import torch.nn.functional as F
 import torchvision
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+# positional encoding from nerf
+def positional_encoding(
+    tensor, num_encoding_functions=6, include_input=True, log_sampling=True
+) -> torch.Tensor:
+    r"""Apply positional encoding to the input.
+
+    Args:
+        tensor (torch.Tensor): Input tensor to be positionally encoded.
+        encoding_size (optional, int): Number of encoding functions used to compute
+            a positional encoding (default: 6).
+        include_input (optional, bool): whether or not to include the input in the
+            positional encoding (default: True).
+
+    Returns:
+    (torch.Tensor): Positional encoding of the input tensor.
+    """
+    # TESTED
+    # Trivially, the input tensor is added to the positional encoding.
+    encoding = [tensor] if include_input else []
+    frequency_bands = None
+    if log_sampling:
+        frequency_bands = 2.0 ** torch.linspace(
+            0.0,
+            num_encoding_functions - 1,
+            num_encoding_functions,
+            dtype=tensor.dtype,
+            device=tensor.device,
+        )
+    else:
+        frequency_bands = torch.linspace(
+            2.0 ** 0.0,
+            2.0 ** (num_encoding_functions - 1),
+            num_encoding_functions,
+            dtype=tensor.dtype,
+            device=tensor.device,
+        )
+
+    for freq in frequency_bands:
+        for func in [torch.sin, torch.cos]:
+            encoding.append(func(tensor * freq))
+
+    # Special case, for no positional encoding
+    if len(encoding) == 1:
+        return encoding[0]
+    else:
+        return torch.cat(encoding, dim=-1)
+
+
+# PoseEncoder implementation from: https://github.com/yolish/camera-pose-auto-encoders/blob/main/models/pose_encoder.py
+class PoseEncoder(nn.Module):
+
+    def __init__(self, encoder_dim, apply_positional_encoding=True,
+                 num_encoding_functions=6, shallow_mlp=False):
+
+        super(PoseEncoder, self).__init__()
+        self.apply_positional_encoding = apply_positional_encoding
+        self.num_encoding_functions = num_encoding_functions
+        self.include_input = True
+        self.log_sampling = True
+        x_dim = 3
+        q_dim = 4
+        if self.apply_positional_encoding:
+            x_dim = x_dim + self.num_encoding_functions * x_dim * 2
+            q_dim = q_dim + self.num_encoding_functions * q_dim * 2
+        if shallow_mlp:
+            self.x_encoder = nn.Sequential(nn.Linear(x_dim, 64), nn.ReLU(),
+                                           nn.Linear(64,encoder_dim))
+            self.q_encoder = nn.Sequential(nn.Linear(q_dim, 64), nn.ReLU(),
+                                           nn.Linear(64,encoder_dim))
+        else:
+            self.x_encoder = nn.Sequential(nn.Linear(x_dim, 64), nn.ReLU(),
+                                           nn.Linear(64,128),
+                                           nn.ReLU(),
+                                           nn.Linear(128,256),
+                                           nn.ReLU(),
+                                           nn.Linear(256, encoder_dim)
+                                           )
+            self.q_encoder = nn.Sequential(nn.Linear(q_dim, 64), nn.ReLU(),
+                                           nn.Linear(64, 128),
+                                           nn.ReLU(),
+                                           nn.Linear(128, 256),
+                                           nn.ReLU(),
+                                           nn.Linear(256, encoder_dim)
+                                       )
+
+
+
+        self.x_dim = x_dim
+        self.q_dim = q_dim
+        self._reset_parameters()
+
+    def _reset_parameters(self):
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
+    def forward(self, pose):
+        if self.apply_positional_encoding:
+            encoded_x = positional_encoding(pose[:, :3])
+            encoded_q = positional_encoding(pose[:, 3:])
+        else:
+            encoded_x = pose[:, :3]
+            encoded_q = pose[:, 3:]
+
+        latent_x = self.x_encoder(encoded_x)
+        latent_q = self.q_encoder(encoded_q)
+        return latent_x, latent_q
+
+
+
+
 def batch_dot(v1, v2):
     """
     Dot product along the dim=1
@@ -102,12 +217,20 @@ class NAPR(nn.Module):
             raise NotImplementedError("backbone type: {} not supported".format(backbone_type))
         self.backbone_type = backbone_type
 
+
         # Encoders
         self.rpr_encoder_dim = config.get("rpr_hidden_dim")
         rpr_num_heads = config.get("rpr_num_heads")
         rpr_dim_feedforward = config.get("rpr_dim_feedforward")
         rpr_dropout = config.get("rpr_dropout")
         rpr_activation = config.get("rpr_activation")
+
+        # The learned pose token for delta_x and delta_q
+        self.pose_token_embed_dx = nn.Parameter(torch.zeros((1, self.rpr_encoder_dim)), requires_grad=True)
+        self.pose_token_embed_dq = nn.Parameter(torch.zeros((1, self.rpr_encoder_dim)), requires_grad=True)
+
+        # The pose encoder
+        self.pose_encoder = PoseEncoder(self.rpr_encoder_dim)
 
         self.proj = nn.Linear(backbone_dim, self.rpr_encoder_dim)
 
@@ -125,8 +248,8 @@ class NAPR(nn.Module):
                                                                norm=nn.LayerNorm(self.rpr_encoder_dim))
 
         self.ln = nn.LayerNorm(self.rpr_encoder_dim)
-        self.rel_regressor_x = PoseRegressor(self.rpr_encoder_dim, 3)
-        self.rel_regressor_q = PoseRegressor(self.rpr_encoder_dim, 4)
+        self.rel_regressor_x = PoseRegressor(self.rpr_encoder_dim*2, 3)
+        self.rel_regressor_q = PoseRegressor(self.rpr_encoder_dim*2, 4)
 
         # Initialize FC layers
         for m in list(self.modules()):
@@ -170,17 +293,29 @@ class NAPR(nn.Module):
         else:
             z_refs = refs
 
-        # prepare sequence (query + neighbors)
+        # Prepare sequence (learned_token + neighbors)
         # todo consider giving different neighbors for x and q estimation
-        z_query = z_query.unsqueeze(0)
         z_refs = z_refs.transpose(0,1) # shape: K x  N x Cout
-        seq = torch.cat((z_query, z_refs)) # shape: K+1 x  N x Cout
-        # project
-        seq = self.proj(seq)
+        bs = z_refs.shape[1]
 
-        # aggregate and take output at the query's position (biased towards it)
-        z_x = self.ln(self.rpr_transformer_encoder_x(seq))[0]
-        z_q = self.ln(self.rpr_transformer_encoder_q(seq))[0]
+        # Encode the reference pose and add to the learned tokens
+        enc_x, enc_q = self.pose_encoder(ref_pose) # N x Cout, N x Cout
+        pose_token_embed_dx = self.pose_token_embed_dx.unsqueeze(1).repeat(1, bs, 1) + enc_x.unsqueeze(0)
+        pose_token_embed_dq = self.pose_token_embed_dq.unsqueeze(1).repeat(1, bs, 1) + enc_q.unsqueeze(0)
+        seq_x = torch.cat((pose_token_embed_dx, z_refs)) # shape: K+1 x  N x Cout
+        seq_q = torch.cat((pose_token_embed_dq, z_refs))  # shape: K+1 x  N x Cout
+
+        # Project
+        seq_x = self.proj(seq_x)
+        seq_q = self.proj(seq_x)
+
+        # Aggregate neighbors and take output at the learNable token position - giving a latent repr. of the env.
+        z_x = self.ln(self.rpr_transformer_encoder_x(seq_x))[0]
+        z_q = self.ln(self.rpr_transformer_encoder_q(seq_q))[0]
+
+        # Concat the env. repr for x and q with the query latent # TODO consider outputting two latent for the query
+        z_x = torch.cat((z_x, z_query))
+        z_q = torch.cat((z_q, z_query))
 
         # regress the deltas
         delta_x = self.rel_regressor_x(z_x)
