@@ -307,7 +307,7 @@ class NAPR(nn.Module):
 
         # Project
         seq_x = self.proj(seq_x)
-        seq_q = self.proj(seq_x)
+        seq_q = self.proj(seq_q)
 
         # Aggregate neighbors and take output at the learNable token position - giving a latent repr. of the env.
         z_x = self.ln(self.rpr_transformer_encoder_x(seq_x))[0]
@@ -330,7 +330,7 @@ class NAPR(nn.Module):
 
         return {"pose":p}
 
-
+'''
 class NSRPR(nn.Module):
 
     def __init__(self, config):
@@ -444,7 +444,7 @@ class NS2RPR(nn.Module):
 
         # return the relative poses and the log-softmax from the first and second classifier
         return returned_value
-
+'''
 
 
 
