@@ -12,14 +12,12 @@ def positional_encoding(
     tensor, num_encoding_functions=6, include_input=True, log_sampling=True
 ) -> torch.Tensor:
     r"""Apply positional encoding to the input.
-
     Args:
         tensor (torch.Tensor): Input tensor to be positionally encoded.
         encoding_size (optional, int): Number of encoding functions used to compute
             a positional encoding (default: 6).
         include_input (optional, bool): whether or not to include the input in the
             positional encoding (default: True).
-
     Returns:
     (torch.Tensor): Positional encoding of the input tensor.
     """
@@ -224,15 +222,18 @@ class NAPR(nn.Module):
         rpr_dim_feedforward = config.get("rpr_dim_feedforward")
         rpr_dropout = config.get("rpr_dropout")
         rpr_activation = config.get("rpr_activation")
+        self.num_neighbors = config.get("num_neighbors")
 
         # The learned pose token for delta_x and delta_q
-        self.pose_token_embed_dx = nn.Parameter(torch.zeros((1, self.rpr_encoder_dim)), requires_grad=True)
-        self.pose_token_embed_dq = nn.Parameter(torch.zeros((1, self.rpr_encoder_dim)), requires_grad=True)
+        self.pose_token_embed_dx = nn.Parameter(torch.zeros((1, backbone_dim)), requires_grad=True)
+        self.pose_token_embed_dq = nn.Parameter(torch.zeros((1, backbone_dim)), requires_grad=True)
 
         # The pose encoder
-        self.pose_encoder = PoseEncoder(self.rpr_encoder_dim)
+        self.pose_encoder = PoseEncoder(backbone_dim)
 
         self.proj = nn.Linear(backbone_dim, self.rpr_encoder_dim)
+        self.proj_x = nn.Linear(backbone_dim, self.rpr_encoder_dim)
+        self.proj_q = nn.Linear(backbone_dim, self.rpr_encoder_dim)
 
         transformer_encoder_layer = nn.TransformerEncoderLayer(d_model=self.rpr_encoder_dim,
                                                                nhead=rpr_num_heads,
@@ -272,7 +273,6 @@ class NAPR(nn.Module):
 
     def forward(self, data, encode_refs=True):
         '''
-
         :param query: N x Cin x H x W
         :param refs: N x K x Cin x H x W
         :param ref_pose: N x 7
@@ -302,37 +302,49 @@ class NAPR(nn.Module):
         enc_x, enc_q = self.pose_encoder(ref_pose) # N x Cout, N x Cout
         pose_token_embed_dx = self.pose_token_embed_dx.unsqueeze(1).repeat(1, bs, 1) + enc_x.unsqueeze(0)
         pose_token_embed_dq = self.pose_token_embed_dq.unsqueeze(1).repeat(1, bs, 1) + enc_q.unsqueeze(0)
-        seq_x = torch.cat((pose_token_embed_dx, z_refs)) # shape: K+1 x  N x Cout
-        seq_q = torch.cat((pose_token_embed_dq, z_refs))  # shape: K+1 x  N x Cout
+        seq_x = torch.cat((pose_token_embed_dx, z_query.unsqueeze(0), z_refs)) # shape: K+1 x  N x Cout
+        seq_q = torch.cat((pose_token_embed_dq, z_query.unsqueeze(0), z_refs))  # shape: K+1 x  N x Cout
 
         # Project
-        seq_x = self.proj(seq_x)
-        seq_q = self.proj(seq_q)
+        seq_x = self.proj_x(seq_x)
+        seq_q = self.proj_q(seq_q)
+        #seq_x = self.proj_x(seq_x)
+        #seq_q = self.proj_q(seq_q)
 
         # Aggregate neighbors and take output at the learNable token position - giving a latent repr. of the env.
-        z_x = self.ln(self.rpr_transformer_encoder_x(seq_x))[0]
-        z_q = self.ln(self.rpr_transformer_encoder_q(seq_q))[0]
+        z_x_scene = self.ln(self.rpr_transformer_encoder_x(seq_x))[0]
+        z_q_scene = self.ln(self.rpr_transformer_encoder_q(seq_q))[0]
 
         # Concat the env. repr for x and q with the query latent # TODO consider outputting two latent for the query
-        z_x = torch.cat((z_x, z_query))
-        z_q = torch.cat((z_q, z_query))
+        z_query = self.proj(z_query)
+        z_x = torch.cat((z_x_scene, z_query), dim=1)
+        z_q = torch.cat((z_q_scene, z_query), dim=1)
 
         # regress the deltas
         delta_x = self.rel_regressor_x(z_x)
         delta_q = self.rel_regressor_q(z_q)
-
+        p = torch.cat((delta_x, delta_q), dim=1)
+        pose_neigh = torch.zeros((bs, self.num_neighbors, 7)).to(ref_pose.device)
+        for i in range(self.num_neighbors):
+            z_ref = z_refs[i]
+            z_ref = self.proj(z_ref)
+            z_x = torch.cat((z_x_scene, z_ref), dim=1)
+            z_q = torch.cat((z_q_scene, z_ref), dim=1)
+            delta_x = self.rel_regressor_x(z_x)
+            delta_q = self.rel_regressor_q(z_q)
+            p_neigh = torch.cat((delta_x, delta_q), dim=1)
+            pose_neigh[:, i, :] = p_neigh
         # compute the ref pose
-        x = ref_pose[:, :3] + delta_x
+        #x = ref_pose[:, :3] + delta_x
         #q = ref_pose[:, 3:] + delta_q
-        q = qmult(ref_pose[:, 3:], delta_q)
+        #q = qmult(ref_pose[:, 3:], delta_q)
 
-        p = torch.cat((x,q), dim=1)
+        #p = torch.cat((delta_x,delta_q), dim=1)
 
-        return {"pose":p}
+        return {"pose":p, "pose_neigh":pose_neigh }
 
 '''
 class NSRPR(nn.Module):
-
     def __init__(self, config):
         super().__init__()
         input_dim = config.get("input_dim")
@@ -340,41 +352,30 @@ class NSRPR(nn.Module):
         nhead = config.get("nhead")
         dim_feedforward = config.get("dim_feedforward")
         dropout = config.get("dropout")
-
         transformer_decoder_layer = nn.TransformerDecoderLayer(d_model=d_model, nhead=nhead, dim_feedforward=dim_feedforward,
                                                                dropout=dropout, activation='gelu', batch_first=True, norm_first=True)
-
         self.transformer_decoder = nn.TransformerDecoder(transformer_decoder_layer,
                                                                num_layers=config.get("num_decoder_layers"),
                                                                norm=nn.LayerNorm(d_model))
-
         self.ln = nn.LayerNorm(d_model)
         self.proj = nn.Linear(input_dim, d_model)
         self.cls1 = nn.Sequential(nn.Linear(d_model, 1), nn.LogSoftmax(dim=1))
         self.cls2 = nn.Sequential(nn.Linear(d_model, 1), nn.LogSoftmax(dim=1))
-
         self.rel_regressor_x = PoseRegressor(d_model, 3)
         self.rel_regressor_q = PoseRegressor(d_model, 4)
-
         # Initialize FC layers
         for m in list(self.modules()):
             if isinstance(m, nn.Linear):
                 torch.nn.init.kaiming_normal_(m.weight)
-
     def forward(self, query, knn):
-
         knn = self.proj(knn)
         query = self.proj(query)
-
         # apply first classifier on knn
         knn_distr_before = self.cls1(knn)
-
         # apply decoder
         out = self.ln(self.transformer_decoder(knn, query.unsqueeze(1)))
-
         # apply second classifier on decoders outputs
         knn_distr_after = self.cls2(out)
-
         # apply regressors
         returned_value = {}
         num_neighbors = knn.shape[1]
@@ -384,12 +385,9 @@ class NSRPR(nn.Module):
             returned_value["rel_pose_{}".format(i)] = torch.cat((rel_x, rel_q), dim=1)
         returned_value["knn_distr_before"] = knn_distr_before
         returned_value["knn_distr_after"] = knn_distr_after
-
         # return the relative poses and the log-softmax from the first and second classifier
         return returned_value
-
 class NS2RPR(nn.Module):
-
     def __init__(self, config):
         super().__init__()
         input_dim = config.get("input_dim")
@@ -397,41 +395,30 @@ class NS2RPR(nn.Module):
         nhead = config.get("nhead")
         dim_feedforward = config.get("dim_feedforward")
         dropout = config.get("dropout")
-
         transformer_decoder_layer = nn.TransformerDecoderLayer(d_model=d_model, nhead=nhead, dim_feedforward=dim_feedforward,
                                                                dropout=dropout, activation='gelu', batch_first=True)
-
         self.transformer_decoder_rot = nn.TransformerDecoder(transformer_decoder_layer,
                                                                num_layers=config.get("num_decoder_layers"),
                                                                norm=nn.LayerNorm(d_model))
-
         self.ln = nn.LayerNorm(d_model)
         self.proj = nn.Linear(input_dim, d_model)
         self.cls1 = nn.Sequential(nn.Linear(d_model, 1), nn.LogSoftmax(dim=1))
         self.cls2 = nn.Sequential(nn.Linear(d_model, 1), nn.LogSoftmax(dim=1))
-
         self.rel_regressor_x = PoseRegressor(d_model, 3)
         self.rel_regressor_q = PoseRegressor(d_model, 4)
-
         # Initialize FC layers
         for m in list(self.modules()):
             if isinstance(m, nn.Linear):
                 torch.nn.init.kaiming_normal_(m.weight)
-
     def forward(self, query, knn):
-
         knn = self.proj(knn)
         query = self.proj(query)
-
         # apply first classifier on knn
         knn_distr_before = self.cls1(knn)
-
         # apply decoder
         out = self.ln(self.transformer_decoder(knn, query.unsqueeze(1)))
-
         # apply second classifier on decoders outputs
         knn_distr_after = self.cls2(out)
-
         # apply regressors
         returned_value = {}
         num_neighbors = knn.shape[1]
@@ -441,16 +428,6 @@ class NS2RPR(nn.Module):
             returned_value["rel_pose_{}".format(i)] = torch.cat((rel_x, rel_q), dim=1)
         returned_value["knn_distr_before"] = knn_distr_before
         returned_value["knn_distr_after"] = knn_distr_after
-
         # return the relative poses and the log-softmax from the first and second classifier
         return returned_value
 '''
-
-
-
-
-
-
-
-
-

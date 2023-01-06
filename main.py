@@ -163,6 +163,7 @@ if __name__ == "__main__":
                 for k, v in minibatch.items():
                     minibatch[k] = v.to(device).to(dtype=torch.float32)
                 gt_pose = minibatch.get('query_pose')
+                delta_poses_neigh = minibatch.get('delta_poses')
                 batch_size = gt_pose.shape[0]
                 n_samples += batch_size
                 n_total_samples += batch_size
@@ -174,7 +175,11 @@ if __name__ == "__main__":
                 res = model(minibatch)
 
                 est_pose = res.get('pose')
-                criterion = pose_loss(est_pose, gt_pose)
+                est_pose_neigh = res.get('pose_neigh')
+
+                criterion = 2*pose_loss(est_pose, gt_pose)
+                for i in range(num_neighbors):
+                    criterion += pose_loss(est_pose_neigh[i], delta_poses_neigh[i])
 
                 # Collect for recoding and plotting
                 running_loss += criterion.item()

@@ -79,6 +79,7 @@ class KNNCameraPoseDataset(Dataset):
             if 'png' not in nn_path:
                 continue
             knn.append(self.load_img(nn_path))
+
             knn_poses[i, :] = self.db_to_pose[nn_path]
             knn_imgs.append(nn_path)
         knn = torch.stack(knn)
@@ -91,7 +92,13 @@ class KNNCameraPoseDataset(Dataset):
         else:
             ref_pose = np.mean(knn_poses, axis=0)
 
-        return {"query":query, "query_pose":query_pose, "knn":knn, "ref_pose":ref_pose}
+        delta_poses = np.zeros((self.sample_size, 7))
+        query_pose = query_pose - ref_pose
+        for i in range(self.sample_size):
+            delta = knn_poses[i] - ref_pose
+            delta_poses[i, :] = delta
+
+        return {"query":query, "query_pose":query_pose, "knn":knn, "ref_pose":ref_pose, "delta_poses":delta_poses, "knn_poses":knn_poses}
         #return {"query":query, "query_pose":query_pose, "knn":knn, "ref_pose":ref_pose, "knn_poses":knn_poses, "knn_imgs":knn_imgs, "query_img":query_path}
 
 
@@ -111,4 +118,26 @@ def read_labels_file(labels_file, dataset_path):
     poses[:, 4] = df['q2'].values
     poses[:, 5] = df['q3'].values
     poses[:, 6] = df['q4'].values
+    return imgs_paths, poses, scenes, scenes_ids
+
+def read_labels_file_ab(labels_file, dataset_path):
+    df = pd.read_csv(labels_file)
+    imgs_paths1 = [join(dataset_path, path) for path in df['img_path0'].values]
+    imgs_paths2 = [join(dataset_path, path) for path in df['img_path1'].values]
+    imgs_paths = []
+    for i in range(len(imgs_paths1)):
+        imgs_paths.append(imgs_paths1[i] + '_' + imgs_paths2[i])
+    scenes = df['scene_a'].values
+    scene_unique_names = np.unique(scenes)
+    scene_name_to_id = dict(zip(scene_unique_names, list(range(len(scene_unique_names)))))
+    scenes_ids = [scene_name_to_id[s] for s in scenes]
+    n = df.shape[0]
+    poses = np.zeros((n, 7))
+    poses[:, 0] = df['x1_ab'].values
+    poses[:, 1] = df['x2_ab'].values
+    poses[:, 2] = df['x3_ab'].values
+    poses[:, 3] = df['q1_ab'].values
+    poses[:, 4] = df['q2_ab'].values
+    poses[:, 5] = df['q3_ab'].values
+    poses[:, 6] = df['q4_ab'].values
     return imgs_paths, poses, scenes, scenes_ids
