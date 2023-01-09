@@ -79,7 +79,6 @@ class KNNCameraPoseDataset(Dataset):
             if 'png' not in nn_path:
                 continue
             knn.append(self.load_img(nn_path))
-
             knn_poses[i, :] = self.db_to_pose[nn_path]
             knn_imgs.append(nn_path)
         knn = torch.stack(knn)
@@ -92,13 +91,14 @@ class KNNCameraPoseDataset(Dataset):
         else:
             ref_pose = np.mean(knn_poses, axis=0)
 
-        delta_poses = np.zeros((self.sample_size, 7))
-        query_pose = query_pose - ref_pose
-        for i in range(self.sample_size):
-            delta = knn_poses[i] - ref_pose
-            delta_poses[i, :] = delta
+        # query_pose_delta = query_pose - ref_pose
+        # delta_poses = np.zeros((self.sample_size, 7))
+        # for i in range(self.sample_size):
+        #     delta = knn_poses[i] - ref_pose
+        #     delta_poses[i, :] = delta
 
-        return {"query":query, "query_pose":query_pose, "knn":knn, "ref_pose":ref_pose, "delta_poses":delta_poses, "knn_poses":knn_poses}
+        return {"query":query, "query_pose":query_pose, "knn":knn, "ref_pose":ref_pose, "knn_poses":knn_poses}
+        #return {"query":query, "query_pose":query_pose, "query_pose_delta":query_pose_delta, "knn":knn, "ref_pose":ref_pose, "ref_delta_poses":delta_poses, "knn_poses":knn_poses}
         #return {"query":query, "query_pose":query_pose, "knn":knn, "ref_pose":ref_pose, "knn_poses":knn_poses, "knn_imgs":knn_imgs, "query_img":query_path}
 
 

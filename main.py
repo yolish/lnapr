@@ -66,9 +66,11 @@ if __name__ == "__main__":
     arg_parser.add_argument("--backbone_path", help="path to backbone .pth - e.g. efficientnet", default="models/backbones/efficient-net-b0.pth")
     arg_parser.add_argument("--dataset_path", help="path to the physical location of the dataset", default="/nfstemp/Datasets/7Scenes/")
     arg_parser.add_argument("--labels_file", help="path to a file mapping query images to their poses", default="datasets/7Scenes/7scenes_all_scenes.csv")
+    #arg_parser.add_argument("--labels_file", help="path to a file mapping query images to their poses", default="datasets/7Scenes_orig/abs_7scenes_pose.csv_chess_test.csv")
     arg_parser.add_argument("--refs_file", help="path to a file mapping reference images to their poses", default="datasets/7Scenes/7scenes_all_scenes.csv")
     #arg_parser.add_argument("--knn_file", help="path to a file mapping query images to their knns", default="datasets/7Scenes/7scenes_all_scenes.csv_with_netvlads.csv-knn-7scenes_all_scenes.csv_with_netvlads.csv")
     arg_parser.add_argument("--knn_file", help="path to a file mapping query images to their knns", default="datasets/7Scenes_pairs/7scenes_training_pairs_neighbors_4_sorted.csv")
+    #arg_parser.add_argument("--knn_file", help="path to a file mapping query images to their knns", default="datasets/7Scenes_pairs/7scenes_training_pairs_neighbors_1_knn_full.csv")
     arg_parser.add_argument("--checkpoint_path",
                             help="path to a pre-trained model (should match the model indicated in model_name")
     arg_parser.add_argument("--experiment", help="a short string to describe the experiment/commit used")
@@ -162,8 +164,8 @@ if __name__ == "__main__":
             for batch_idx, minibatch in enumerate(dataloader):
                 for k, v in minibatch.items():
                     minibatch[k] = v.to(device).to(dtype=torch.float32)
-                gt_pose = minibatch.get('query_pose')
-                delta_poses_neigh = minibatch.get('delta_poses')
+                gt_pose = minibatch.get("query_pose")
+                poses_neigh = minibatch.get('knn_poses')
                 batch_size = gt_pose.shape[0]
                 n_samples += batch_size
                 n_total_samples += batch_size
@@ -177,9 +179,10 @@ if __name__ == "__main__":
                 est_pose = res.get('pose')
                 est_pose_neigh = res.get('pose_neigh')
 
-                criterion = 2*pose_loss(est_pose, gt_pose)
-                for i in range(num_neighbors):
-                    criterion += pose_loss(est_pose_neigh[i], delta_poses_neigh[i])
+                criterion = pose_loss(est_pose, gt_pose)
+                if num_neighbors > 1:
+                    for i in range(num_neighbors):
+                        criterion += pose_loss(est_pose_neigh[i], poses_neigh[i])
 
                 # Collect for recoding and plotting
                 running_loss += criterion.item()
@@ -221,8 +224,9 @@ if __name__ == "__main__":
             if 1:
                 labels_file = "./datasets/7Scenes/abs_7scenes_pose.csv_{}_test.csv".format(scene)
                 refs_file = args.refs_file
-                #knn_file = "./datasets/7Scenes/abs_7scenes_pose.csv_{}_test.csv_with_netvlads.csv-knn-7scenes_all_scenes.csv_with_netvlads.csv".format(scene)
-                knn_file = "./datasets/7Scenes_pairs/7scenes_knn_test_neigh_{}.csv".format(scene)
+                knn_file = "./datasets/7Scenes/abs_7scenes_pose.csv_{}_test.csv_with_netvlads.csv-knn-7scenes_all_scenes.csv_with_netvlads.csv".format(scene)
+                #knn_file = "./datasets/7Scenes_orig/NN_7scenes_{}_lnapr.csv".format(scene)
+                #knn_file = "./datasets/7Scenes_pairs/7scenes_knn_test_neigh_{}.csv".format(scene)
                 stats = test(args, config, model, labels_file, refs_file, knn_file, num_neighbors)
                 f.write("{},{:.3f},{:.3f}\n".format(scene, np.nanmedian(stats[:, 0]),
                                                     np.nanmedian(stats[:, 1])))

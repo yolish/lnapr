@@ -308,8 +308,6 @@ class NAPR(nn.Module):
         # Project
         seq_x = self.proj_x(seq_x)
         seq_q = self.proj_q(seq_q)
-        #seq_x = self.proj_x(seq_x)
-        #seq_q = self.proj_q(seq_q)
 
         # Aggregate neighbors and take output at the learNable token position - giving a latent repr. of the env.
         z_x_scene = self.ln(self.rpr_transformer_encoder_x(seq_x))[0]
@@ -324,6 +322,7 @@ class NAPR(nn.Module):
         delta_x = self.rel_regressor_x(z_x)
         delta_q = self.rel_regressor_q(z_q)
         p = torch.cat((delta_x, delta_q), dim=1)
+        p += ref_pose
         pose_neigh = torch.zeros((bs, self.num_neighbors, 7)).to(ref_pose.device)
         for i in range(self.num_neighbors):
             z_ref = z_refs[i]
@@ -333,6 +332,7 @@ class NAPR(nn.Module):
             delta_x = self.rel_regressor_x(z_x)
             delta_q = self.rel_regressor_q(z_q)
             p_neigh = torch.cat((delta_x, delta_q), dim=1)
+            p_neigh += ref_pose
             pose_neigh[:, i, :] = p_neigh
         # compute the ref pose
         #x = ref_pose[:, :3] + delta_x
